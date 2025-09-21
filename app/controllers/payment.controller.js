@@ -49,14 +49,22 @@ exports.webhook = async (req, res) => {
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.log('⚠️  Webhook signature verification failed.', err.message);
+    console.log('Webhook signature verification failed.', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   // Procesar el evento
+  //  if (event.type === "checkout.session.completed") {
   if (event.type === 'payment_intent.succeeded') {
     const paymentIntent = event.data.object;
     console.log('Pago recibido:', paymentIntent.id);
+    const session = event.data.object;
+    const orderId = session.metadata.orderId;
+    console.log('Sesión de pago: ', session);
+    await Order.update(
+      { status: "paid" },
+      { where: { id: orderId } }
+    );
   }
 
   res.json({ received: true });
