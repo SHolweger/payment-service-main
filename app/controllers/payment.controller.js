@@ -42,25 +42,23 @@ exports.createCheckoutSession = async (req, res) => {
   }
 };
 
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+
 exports.webhook = async (req, res) => {
-  const sig = req.headers["stripe-signature"];
+  const sig = req.headers['stripe-signature'];
   let event;
 
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
-    console.error(err.message);
+    console.log('⚠️  Webhook signature verification failed.', err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
-  if (event.type === "checkout.session.completed") {
-    const session = event.data.object;
-    const orderId = session.metadata.orderId;
-
-    await Order.update(
-      { status: "paid" },
-      { where: { id: orderId } }
-    );
+  // Procesar el evento
+  if (event.type === 'payment_intent.succeeded') {
+    const paymentIntent = event.data.object;
+    console.log('Pago recibido:', paymentIntent.id);
   }
 
   res.json({ received: true });
