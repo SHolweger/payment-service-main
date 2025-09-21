@@ -42,8 +42,6 @@ exports.createCheckoutSession = async (req, res) => {
   }
 };
 
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-
 exports.webhook = async (req, res) => {
   const sig = req.headers['stripe-signature'];
   let event;
