@@ -32,7 +32,9 @@ exports.createCheckoutSession = async (req, res) => {
       mode: "payment",
       success_url: `${FRONTEND_URL}/payment/success`, 
       cancel_url: `${FRONTEND_URL}/payment/cancel`,
-      metadata: { orderId: order.id } // enviar el id de la orden a Stripe
+      payment_intent_data: {
+        metadata: { orderId: order.id }
+      }
     });
 
     res.json({ url: session.url });
@@ -54,12 +56,12 @@ exports.webhook = async (req, res) => {
   }
 
   // Procesar el evento
-    if (event.type === "checkout.session.completed") {
-  //if (event.type === 'payment_intent.succeeded') {
+  //if (event.type === "checkout.session.completed") { 
+  if (event.type === 'payment_intent.succeeded') {
     const paymentIntent = event.data.object;
     console.log('Pago recibido:', paymentIntent.id);
     const session = event.data.object;
-    const orderId = session.metadata.orderId;
+    const orderId = paymentIntent.metadata.orderId;
     console.log('Sesión de pago: ', session);
     await Order.update(
       { status: "paid" },
