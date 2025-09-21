@@ -9,7 +9,7 @@ require("dotenv").config();
 
 // Variables de entorno (puedes usar dotenv si prefieres)
 const APP_PORT = process.env.APP_PORT || 8082; // distinto al resto de microservicios
-const API_GATEWAY_URL = process.env.API_GATEWAY_URL || "http://localhost:5000";
+const API_GATEWAY_URL = process.env.API_GATEWAY_URL;
 
 class Server {
   constructor() {

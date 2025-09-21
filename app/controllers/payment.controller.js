@@ -16,6 +16,8 @@ exports.createCheckoutSession = async (req, res) => {
       status: "pending",
     });
 
+    const FRONTEND_URL = process.env.FRONTEND_URL;
+
     // Crear sesión en Stripe
     const session = await stripe.checkout.sessions.create({
       payment_method_types: ["card"],
@@ -28,8 +30,8 @@ exports.createCheckoutSession = async (req, res) => {
         quantity: item.quantity,
       })),
       mode: "payment",
-      success_url: "http://localhost:5173/payment/success",
-      cancel_url: "http://localhost:5173/payment/cancel",
+      success_url: `${FRONTEND_URL}/payment/success`,
+      cancel_url: `${FRONTEND_URL}/payment/cancel`,
       metadata: { orderId: order.id },
     });
 
