@@ -1,20 +1,18 @@
-// controllers/payment.controller.js
 const stripe = require("../config/stripe");
 const { Order } = require("../models");
 
-// convierte Q -> cents USD usando env FX_GTQ_TO_USD (1 GTQ = X USD)
 const getFxGtqToUsd = () => {
   const raw = process.env.FX_GTQ_TO_USD;
   const val = Number(raw);
   if (!raw || !Number.isFinite(val) || val <= 0) {
     throw new Error("FX_GTQ_TO_USD no configurado o inválido");
   }
-  return val; // USD por 1 GTQ
+  return val;
 };
 
 const toUsdCentsFromGtq = (gtq, fx) => {
-  const usd = Number(gtq) * fx;              // USD
-  return Math.round(usd * 100);              // cents USD (entero)
+  const usd = Number(gtq) * fx;
+  return Math.round(usd * 100);
 };
 
 exports.createCheckoutSession = async (req, res) => {
@@ -27,11 +25,10 @@ exports.createCheckoutSession = async (req, res) => {
 
     const fx = getFxGtqToUsd();
 
-    // Construir line_items ya convertidos a USD cents
     const line_items = items.map((it) => {
-      const priceGtq = Number(it.price) || 0;      // precio viene en GTQ desde el front
+      const priceGtq = Number(it.price) || 0;
       const qty = Number(it.quantity) || 1;
-      const unit_amount = toUsdCentsFromGtq(priceGtq, fx); // USD cents por unidad
+      const unit_amount = toUsdCentsFromGtq(priceGtq, fx);
 
       return {
         price_data: {
@@ -43,12 +40,11 @@ exports.createCheckoutSession = async (req, res) => {
       };
     });
 
-    // Total en cents USD (suma por línea para coincidir con Stripe)
-    const amount_cents = line_items.reduce((acc, li) => {
-      return acc + (li.price_data.unit_amount * li.quantity);
-    }, 0);
+    const amount_cents = line_items.reduce(
+      (acc, li) => acc + li.price_data.unit_amount * li.quantity,
+      0
+    );
 
-    // Crear orden en BD en USD (centavos)
     const order = await Order.create({
       userId,
       amount_cents,
@@ -66,11 +62,14 @@ exports.createCheckoutSession = async (req, res) => {
       cancel_url: `${FRONTEND_URL}/payment/cancel?session_id={CHECKOUT_SESSION_ID}`,
       metadata: { orderId: String(order.id) },
       client_reference_id: String(userId || ""),
+      payment_intent_data: {
+        metadata: { orderId: String(order.id) }
+      }
     });
 
     await order.update({
       stripeSessionId: session.id,
-      paymentIntentId: session.payment_intent || null,
+      paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
     });
 
     return res.json({ url: session.url });
@@ -83,30 +82,57 @@ exports.createCheckoutSession = async (req, res) => {
 exports.webhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
+
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
+    event = stripe.webhooks.constructEvent(
+      req.body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
   } catch (err) {
-    console.error(err.message);
+    console.error("Webhook signature error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
   }
 
   try {
     if (event.type === "checkout.session.completed") {
       const session = event.data.object;
-      if (session.payment_status === "paid") {
-        const orderId = session.metadata?.orderId;
-        if (orderId) {
-          await Order.update(
-            { status: "paid", stripeSessionId: session.id, paymentIntentId: session.payment_intent },
-            { where: { id: orderId } }
-          );
-        }
+      const orderId = session.metadata?.orderId || null;
+      const paymentIntentId =
+        typeof session.payment_intent === "string" ? session.payment_intent : null;
+
+      if (orderId) {
+        await Order.update(
+          {
+            status: session.payment_status === "paid" ? "paid" : "processing",
+            stripeSessionId: session.id,
+            paymentIntentId
+          },
+          { where: { id: orderId } }
+        );
       }
     }
+
+    if (event.type === "payment_intent.succeeded") {
+      const intent = event.data.object;
+      const orderId = intent.metadata?.orderId || null;
+
+      if (orderId) {
+        await Order.update(
+          { status: "paid", paymentIntentId: intent.id },
+          { where: { id: orderId } }
+        );
+      } else {
+        await Order.update(
+          { status: "paid" },
+          { where: { paymentIntentId: intent.id } }
+        );
+      }
+    }
+
     return res.json({ received: true });
   } catch (e) {
     console.error("Webhook handler error:", e);
     return res.status(500).send("Webhook handler error");
   }
 };
-

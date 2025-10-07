@@ -10,10 +10,8 @@ class PaymentRoute {
   registerRoutes() {
     const router = express.Router();
 
-    // Crear sesión de pago
     router.post('/create-checkout-session', paymentController.createCheckoutSession);
 
-    // Webhook de Stripe (requiere raw body)
     router.post('/webhook', express.raw({ type: 'application/json' }), paymentController.webhook);
 
     this.app.use('/api/payment', router);
