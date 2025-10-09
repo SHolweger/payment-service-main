@@ -37,6 +37,10 @@ module.exports = (sequelize, DataTypes) => {
     paymentIntentId: { 
       type: DataTypes.STRING 
     },
+    stock_discounted:{
+      type: DataTypes.BOOLEAN,
+      defaultValue: false
+    }
   });
 
   Order.associate = (models) => {

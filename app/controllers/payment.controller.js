@@ -1,4 +1,5 @@
 const stripe = require("../config/stripe");
+const axios = require("axios"); // <-- IMPORTANTE
 const { Order, Invoice, InvoiceDetail } = require("../models");
 
 const getFxGtqToUsd = () => {
@@ -11,13 +12,14 @@ const getFxGtqToUsd = () => {
 };
 
 const toUsdCentsFromGtq = (gtq, fx) => {
-  const usd = Number(gtq) * fx;     
-  return Math.round(usd * 100);     
+  const usd = Number(gtq) * fx;
+  return Math.round(usd * 100);
 };
 
 const toGtqCentsFromUsdCents = (usd_cents, fx) => {
   return Math.round(usd_cents / fx);
 };
+
 exports.createCheckoutSession = async (req, res) => {
   try {
     const { items = [], userId, nit } = req.body;
@@ -27,9 +29,10 @@ exports.createCheckoutSession = async (req, res) => {
     }
 
     const compactItems = items.map((it) => ({
-      n: String(it.name || "Item").slice(0, 70), 
-      p: Number(it.price) || 0,                  
-      q: Number(it.quantity) || 1,              
+      n: String(it.name || "Item").slice(0, 70),
+      p: Number(it.price) || 0,
+      q: Number(it.quantity) || 1,
+      v: Number(it.producto_talla_id || 0), 
     }));
 
     const fx = getFxGtqToUsd();
@@ -56,12 +59,12 @@ exports.createCheckoutSession = async (req, res) => {
 
     const order = await Order.create({
       userId,
-      amount_cents,                 
+      amount_cents,
       currency: "usd",
-      amount_gtq: amount_gtq_cents, 
+      amount_gtq: amount_gtq_cents,
       status: "pending",
       nit: nit || "CF",
-       
+      stock_discounted: false,
     });
 
     const FRONTEND_URL = process.env.FRONTEND_URL;
@@ -156,12 +159,12 @@ exports.webhook = async (req, res) => {
           invoice = await Invoice.create({
             orderId: order.id,
             userId: order.userId,
-            totalAmount: order.amount_cents, 
-            currency: order.currency,        
+            totalAmount: order.amount_cents,
+            currency: order.currency,
             nit: order.nit || "CF",
             receipt_url: receiptUrl,
-            serie:"A",
-            numero: Date.now().toString().slice(-6),  //correlativo.toString().padStart(6, "0"), 
+            serie: "A",
+            numero: Date.now().toString().slice(-6),
             issuedAt: new Date(),
           });
         }
@@ -170,7 +173,7 @@ exports.webhook = async (req, res) => {
         if (detailCount === 0) {
           let fxFromOrder = null;
           if (order.amount_gtq > 0) {
-            fxFromOrder = order.amount_cents / order.amount_gtq; 
+            fxFromOrder = order.amount_cents / order.amount_gtq;
           } else {
             fxFromOrder = getFxGtqToUsd();
           }
@@ -194,8 +197,9 @@ exports.webhook = async (req, res) => {
                 q: li.quantity || 1,
                 p:
                   li.quantity && fxFromOrder
-                    ? (li.amount_subtotal / 100) / fxFromOrder / li.quantity 
+                    ? (li.amount_subtotal / 100) / fxFromOrder / li.quantity
                     : 0,
+                v: 0, 
               }));
             } catch (e) {
               console.warn("No se pudieron leer line_items del Session:", e?.message);
@@ -205,7 +209,7 @@ exports.webhook = async (req, res) => {
           for (const it of metaItems) {
             const name = String(it.n || "Item").slice(0, 200);
             const qty = Number(it.q) || 1;
-            const priceGTQ = Number(it.p) || 0; 
+            const priceGTQ = Number(it.p) || 0;
             const priceUSD = priceGTQ * fxFromOrder;
 
             const subtotalGTQ = priceGTQ * qty;
@@ -221,6 +225,50 @@ exports.webhook = async (req, res) => {
               subtotal_usd: subtotalUSD.toFixed(2),
             });
           }
+
+          try {
+            const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE;
+            if (!PRODUCTO_SERVICE) {
+              console.warn("PRODUCTO_SERVICE no configurado; se omite decremento de stock.");
+            } else if (!order.stock_discounted) {
+              const byVariant = {};
+              for (const it of metaItems) {
+                const vId = Number(it.v || 0);
+                const qty = Number(it.q) || 1;
+                if (!vId || vId <= 0) continue;
+                byVariant[vId] = (byVariant[vId] || 0) + qty;
+              }
+
+              if (Object.keys(byVariant).length > 0) {
+                const calls = Object.entries(byVariant).map(([variantId, qty]) =>
+                  axios.post(
+                    `${PRODUCTO_SERVICE}/producto-service/producto-talla-color/${variantId}/decrement`,
+                    { qty }
+                  )
+                );
+
+                const results = await Promise.allSettled(calls);
+
+                // marcar orden como ya descontada para idempotencia
+                await order.update({ stock_discounted: true });
+
+                // log de errores individuales
+                for (const r of results) {
+                  if (r.status === "rejected") {
+                    console.error("Fallo decremento de stock:", r.reason?.message);
+                  }
+                }
+              } else {
+                console.warn("No hay variantIds (v) válidos en metadata; no se descuenta stock.");
+              }
+            }
+          } catch (stockErr) {
+            // NO rompas el webhook: solo loggea (ya se marcó como paid y se generó factura)
+            console.error("Error al descontar stock:", stockErr?.message);
+          }
+          // ==============================
+          // FIN BLOQUE DESCUENTO DE STOCK
+          // ==============================
         }
       }
     }
