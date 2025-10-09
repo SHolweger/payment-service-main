@@ -150,6 +150,12 @@ exports.webhook = async (req, res) => {
             console.log(`Factura generada #${invoice.id} para la orden ${order.id}`);
           } catch (invoiceErr) {
             console.error("Error creando factura:", invoiceErr);
+            return res
+              .status(500)
+              .send({
+                message: "Error al crear la factura."
+              })
+            
           }
         }
       }
@@ -170,7 +176,6 @@ exports.webhook = async (req, res) => {
 
     return res.json({ received: true });
   } catch (e) {
-    console.error("Webhook handler error:", e);
     return res.status(500).send("Webhook handler error");
   }
 };

@@ -15,6 +15,10 @@ module.exports = (sequelize, DataTypes) => {
      type: DataTypes.INTEGER,
      allowNull: false,
    },
+   nit:{
+      type: DataTypes.STRING,
+      allowNull: true
+   },
    amount_gtq: {
      type: DataTypes.INTEGER,
      allowNull: false,

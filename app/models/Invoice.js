@@ -30,8 +30,13 @@ module.exports = (sequelize, DataTypes) => {
    },
    pdfUrl: {
      type: DataTypes.STRING,
-     allowNull: true, // más adelante puedes guardar el link del PDF generado
+     allowNull: true, 
    },
+   companyName:{
+    type: DataTypes.STRING,
+    allowNull: false,
+    defaultValue: "FitZone S.A"
+   }
  });
 
  return Invoice;

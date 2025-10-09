@@ -4,6 +4,7 @@ const cors = require('cors');
 const bodyParser = require('body-parser');
 const db = require('./app/models');
 const PaymentRoute = require('./app/routes/payment.routes.js');
+const invoiceRoute=require('./app/routes/invoice.routes.js')
 require("dotenv").config();
 
 
@@ -42,6 +43,7 @@ class Server {
 
   configureRoutes() {
     new PaymentRoute(this.app);
+    new invoiceRoute(this.app);
   }
 
   async connectDatabase() {
