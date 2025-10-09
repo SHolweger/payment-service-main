@@ -61,6 +61,7 @@ exports.createCheckoutSession = async (req, res) => {
       amount_gtq: amount_gtq_cents, 
       status: "pending",
       nit: nit || "CF",
+       
     });
 
     const FRONTEND_URL = process.env.FRONTEND_URL;
@@ -158,6 +159,10 @@ exports.webhook = async (req, res) => {
             totalAmount: order.amount_cents, 
             currency: order.currency,        
             nit: order.nit || "CF",
+            receipt_url: receiptUrl,
+            serie:"A",
+            numero: Date.now().toString().slice(-6),  //correlativo.toString().padStart(6, "0"), 
+            issuedAt: new Date(),
           });
         }
 
