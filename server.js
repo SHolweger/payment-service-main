@@ -1,15 +1,13 @@
-//server.js
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const db = require('./app/models');
 const PaymentRoute = require('./app/routes/payment.routes.js');
-const invoiceRoute=require('./app/routes/invoice.routes.js')
+
 require("dotenv").config();
 
 
-// Variables de entorno (puedes usar dotenv si prefieres)
-const APP_PORT = process.env.APP_PORT || 8082; // distinto al resto de microservicios
+const APP_PORT = process.env.APP_PORT || 8082; 
 const API_GATEWAY_URL = process.env.API_GATEWAY_URL;
 
 class Server {
@@ -17,10 +15,8 @@ class Server {
     this.app = express();
     this.port = APP_PORT;
 
-    // Middleware especial para el webhook (Stripe necesita el body crudo en ese endpoint)
     this.app.use((req, res, next) => {
       if (req.originalUrl === '/api/payment/webhook') {
-        // Usamos body raw para Stripe
         express.raw({ type: 'application/json' })(req, res, next);
       } else {
         express.json()(req, res, next);
@@ -37,13 +33,11 @@ class Server {
       origin: API_GATEWAY_URL,
       credentials: true
     }));
-    // No bodyParser.json() global, porque rompe el raw de Stripe
     this.app.use(bodyParser.urlencoded({ extended: true }));
   }
 
   configureRoutes() {
     new PaymentRoute(this.app);
-    new invoiceRoute(this.app);
   }
 
   async connectDatabase() {

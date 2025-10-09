@@ -1,7 +1,5 @@
-// payment.controller.js
 const stripe = require("../config/stripe");
-const { Order } = require("../models");
-const { Invoice } = require("../models");
+const { Order, Invoice, InvoiceDetail } = require("../models");
 
 const getFxGtqToUsd = () => {
   const raw = process.env.FX_GTQ_TO_USD;
@@ -9,36 +7,37 @@ const getFxGtqToUsd = () => {
   if (!raw || !Number.isFinite(val) || val <= 0) {
     throw new Error("FX_GTQ_TO_USD no configurado o inválido");
   }
-  return val; // fx = USD por 1 GTQ
+  return val;
 };
 
 const toUsdCentsFromGtq = (gtq, fx) => {
-  const usd = Number(gtq) * fx;      // GTQ -> USD
-  return Math.round(usd * 100);      // a centavos
+  const usd = Number(gtq) * fx;     
+  return Math.round(usd * 100);     
 };
 
-// Helper nuevo: USD cents -> GTQ cents
 const toGtqCentsFromUsdCents = (usd_cents, fx) => {
-  // usd = usd_cents / 100
-  // gtq = usd / fx
-  // gtq_cents = Math.round(gtq * 100) = Math.round(usd_cents / fx)
   return Math.round(usd_cents / fx);
 };
-
-// Crear Sesión de Pago
 exports.createCheckoutSession = async (req, res) => {
   try {
-    const { items = [], userId } = req.body;
+    const { items = [], userId, nit } = req.body;
+
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Items vacíos." });
     }
+
+    const compactItems = items.map((it) => ({
+      n: String(it.name || "Item").slice(0, 70), 
+      p: Number(it.price) || 0,                  
+      q: Number(it.quantity) || 1,              
+    }));
 
     const fx = getFxGtqToUsd();
 
     const line_items = items.map((it) => {
       const priceGtq = Number(it.price) || 0;
       const qty = Number(it.quantity) || 1;
-      const unit_amount = toUsdCentsFromGtq(priceGtq, fx); // USD cents por unidad
+      const unit_amount = toUsdCentsFromGtq(priceGtq, fx);
       return {
         price_data: {
           currency: "usd",
@@ -53,16 +52,15 @@ exports.createCheckoutSession = async (req, res) => {
       (acc, li) => acc + li.price_data.unit_amount * li.quantity,
       0
     );
-
-    // <-- FIX: guardar GTQ en centavos (INTEGER)
     const amount_gtq_cents = toGtqCentsFromUsdCents(amount_cents, fx);
 
     const order = await Order.create({
       userId,
-      amount_cents,            // USD cents (INTEGER)
+      amount_cents,                 
       currency: "usd",
-      amount_gtq: amount_gtq_cents, // INTEGER en BD
+      amount_gtq: amount_gtq_cents, 
       status: "pending",
+      nit: nit || "CF",
     });
 
     const FRONTEND_URL = process.env.FRONTEND_URL;
@@ -75,13 +73,18 @@ exports.createCheckoutSession = async (req, res) => {
       metadata: { orderId: String(order.id) },
       client_reference_id: String(userId || ""),
       payment_intent_data: {
-        metadata: { orderId: String(order.id) }
-      }
+        metadata: {
+          orderId: String(order.id),
+          nit: String(nit || "CF"),
+          items: JSON.stringify(compactItems),
+        },
+      },
     });
 
     await order.update({
       stripeSessionId: session.id,
-      paymentIntentId: typeof session.payment_intent === "string" ? session.payment_intent : null,
+      paymentIntentId:
+        typeof session.payment_intent === "string" ? session.payment_intent : null,
     });
 
     return res.json({ url: session.url });
@@ -91,7 +94,6 @@ exports.createCheckoutSession = async (req, res) => {
   }
 };
 
-// Webhook de Stripe con Factura
 exports.webhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
@@ -115,13 +117,8 @@ exports.webhook = async (req, res) => {
         typeof session.payment_intent === "string" ? session.payment_intent : null;
 
       if (orderId) {
-        console.log(`Checkout completado. Orden ${orderId} en procesamiento.`);
         await Order.update(
-          {
-            status: "processing",
-            stripeSessionId: session.id,
-            paymentIntentId,
-          },
+          { status: "processing", stripeSessionId: session.id, paymentIntentId },
           { where: { id: orderId } }
         );
       }
@@ -130,32 +127,94 @@ exports.webhook = async (req, res) => {
     if (event.type === "payment_intent.succeeded") {
       const intent = event.data.object;
       const orderId = intent.metadata?.orderId;
+
       if (orderId) {
         const order = await Order.findByPk(orderId);
-        if (order && order.status !== "paid") {
-          console.log(`Pago confirmado para orden ${orderId}. Generando factura...`);
-          await order.update({
-            status: "paid",
-            paymentIntentId: intent.id,
-          });
+        if (!order) return res.json({ received: true });
+
+        if (order.status !== "paid") {
+          await order.update({ status: "paid", paymentIntentId: intent.id });
+        }
+
+        let invoice = await Invoice.findOne({ where: { orderId } });
+        if (!invoice) {
+          let receiptUrl = null;
           try {
-            const invoice = await Invoice.create({
-              orderId: order.id,
-              userId: order.userId,
-              totalAmount_usd: order.amount_cents / 100,      // USD en unidades
-              totalAmount_gtq: order.amount_gtq / 100,        // <-- convertir de centavos a GTQ
-              currency: order.currency,
-              status: "issued",
+            const pi = await stripe.paymentIntents.retrieve(intent.id, {
+              expand: ["latest_charge", "charges.data.balance_transaction"],
             });
-            console.log(`Factura generada #${invoice.id} para la orden ${order.id}`);
-          } catch (invoiceErr) {
-            console.error("Error creando factura:", invoiceErr);
-            return res
-              .status(500)
-              .send({
-                message: "Error al crear la factura."
-              })
-            
+            if (pi?.latest_charge && typeof pi.latest_charge === "object") {
+              receiptUrl = pi.latest_charge.receipt_url || null;
+            } else if (pi?.charges?.data?.length) {
+              receiptUrl = pi.charges.data[0]?.receipt_url || null;
+            }
+          } catch (e) {
+            console.warn("No se pudo expandir PaymentIntent para receipt_url:", e?.message);
+          }
+
+          invoice = await Invoice.create({
+            orderId: order.id,
+            userId: order.userId,
+            totalAmount: order.amount_cents, 
+            currency: order.currency,        
+            nit: order.nit || "CF",
+          });
+        }
+
+        const detailCount = await InvoiceDetail.count({ where: { invoiceId: invoice.id } });
+        if (detailCount === 0) {
+          let fxFromOrder = null;
+          if (order.amount_gtq > 0) {
+            fxFromOrder = order.amount_cents / order.amount_gtq; 
+          } else {
+            fxFromOrder = getFxGtqToUsd();
+          }
+
+          let metaItems = [];
+          try {
+            if (intent?.metadata?.items) {
+              metaItems = JSON.parse(intent.metadata.items);
+            }
+          } catch (_) {
+            metaItems = [];
+          }
+          if (!metaItems.length && order.stripeSessionId) {
+            try {
+              const lineItems = await stripe.checkout.sessions.listLineItems(
+                order.stripeSessionId,
+                { limit: 100 }
+              );
+              metaItems = lineItems.data.map((li) => ({
+                n: li.description || li.price?.product || "Item",
+                q: li.quantity || 1,
+                p:
+                  li.quantity && fxFromOrder
+                    ? (li.amount_subtotal / 100) / fxFromOrder / li.quantity 
+                    : 0,
+              }));
+            } catch (e) {
+              console.warn("No se pudieron leer line_items del Session:", e?.message);
+            }
+          }
+
+          for (const it of metaItems) {
+            const name = String(it.n || "Item").slice(0, 200);
+            const qty = Number(it.q) || 1;
+            const priceGTQ = Number(it.p) || 0; 
+            const priceUSD = priceGTQ * fxFromOrder;
+
+            const subtotalGTQ = priceGTQ * qty;
+            const subtotalUSD = priceUSD * qty;
+
+            await InvoiceDetail.create({
+              invoiceId: invoice.id,
+              producto: name,
+              cantidad: qty,
+              precio_unitario_gtq: priceGTQ.toFixed(2),
+              precio_unitario_usd: priceUSD.toFixed(2),
+              subtotal_gtq: subtotalGTQ.toFixed(2),
+              subtotal_usd: subtotalUSD.toFixed(2),
+            });
           }
         }
       }
@@ -164,9 +223,7 @@ exports.webhook = async (req, res) => {
     if (event.type === "payment_intent.payment_failed") {
       const intent = event.data.object;
       const orderId = intent.metadata?.orderId;
-
       if (orderId) {
-        console.log(`Pago fallido para la orden ${orderId}.`);
         await Order.update(
           { status: "failed", paymentIntentId: intent.id },
           { where: { id: orderId } }
@@ -176,6 +233,7 @@ exports.webhook = async (req, res) => {
 
     return res.json({ received: true });
   } catch (e) {
-    return res.status(500).send("Webhook handler error");
+    console.error("Webhook handler error:", e);
+    return res.json({ received: true });
   }
 };
