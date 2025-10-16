@@ -29,9 +29,22 @@ const getFxGtqToUsd = () => {
 const toUsdCentsFromGtq = (gtq, fx) => Math.round(Number(gtq) * fx * 100);
 const toGtqCentsFromUsdCents = (usd_cents, fx) => Math.round(usd_cents / fx);
 
+// ========================================================
+// CHECKOUT SESSION
+// ========================================================
 exports.createCheckoutSession = async (req, res) => {
   try {
     const { items = [], userId, nit, direccion_destino, costo_envio, fecha_estimada } = req.body;
+
+    console.log("[checkout] BODY recibido =>", {
+      userId,
+      nit,
+      direccion_destino,
+      costo_envio,
+      fecha_estimada,
+      items_count: Array.isArray(items) ? items.length : 0,
+    });
+
     if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "Items vacíos." });
     }
@@ -70,6 +83,15 @@ exports.createCheckoutSession = async (req, res) => {
       stock_discounted: false,
     });
 
+    console.log("[checkout] METADATA a enviar =>", {
+      orderId: order.id,
+      nit,
+      direccion_destino,
+      costo_envio,
+      fecha_estimada,
+      items_len: items.length,
+    });
+
     const FRONTEND_URL = process.env.FRONTEND_URL;
     const session = await stripe.checkout.sessions.create({
       mode: "payment",
@@ -99,11 +121,14 @@ exports.createCheckoutSession = async (req, res) => {
 
     return res.json({ url: session.url });
   } catch (err) {
-    console.error(err);
+    console.error("[checkout] ERROR general:", err);
     return res.status(500).json({ error: "Error creando sesión de pago" });
   }
 };
 
+// ========================================================
+// FACTURACIÓN
+// ========================================================
 async function createOrGetInvoice(order, intentId) {
   let invoice = await Invoice.findOne({ where: { orderId: order.id } });
   if (invoice) return { invoice, receiptUrl: invoice.receipt_url || null };
@@ -166,6 +191,9 @@ async function createInvoiceDetails(invoice, order, metaItems, fxFromOrder) {
   }
 }
 
+// ========================================================
+// STOCK
+// ========================================================
 async function decrementStockByVariant(order, metaItems) {
   if (!PRODUCTO_SERVICE) return true;
   if (order.stock_discounted) return true;
@@ -202,6 +230,9 @@ async function decrementStockByVariant(order, metaItems) {
   return results.every((r) => r.status === "fulfilled");
 }
 
+// ========================================================
+// ENVÍOS
+// ========================================================
 async function ensureEstadoEnvio(id_envio) {
   try {
     await http.post(RUTA_ESTADO_ENVIO, { id_envio }, { headers });
@@ -227,21 +258,33 @@ async function createEnvioProductoBatch(id_envio, metaItems) {
 }
 
 async function createEnvioFromOrder(order, meta) {
-  const direccion_final = String(meta?.direccion_destino || "Sin dirección");
-  const costo_envio_gtq = Number(meta?.costo_envio_gtq || 0);
+  console.log("[envio] meta recibido =>", {
+    direccion_destino: meta?.direccion_destino,
+    costo_envio_gtq: meta?.costo_envio_gtq,
+    fecha_estimada: meta?.fecha_estimada,
+  });
+
+  const direccion_final = String(meta?.direccion_destino || "Sin dirección").trim() || "Sin dirección";
+  const rawCosto = Number(meta?.costo_envio_gtq || 0);
+  const costo_final = Number.isFinite(rawCosto) && rawCosto > 0 ? rawCosto : 0.01;
+
   let fecha_estimada = String(meta?.fecha_estimada || "");
   if (!fecha_estimada) {
     const hoy = new Date();
     fecha_estimada = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + 3)
       .toISOString()
       .slice(0, 10);
+  } else if (fecha_estimada.includes("T")) {
+    fecha_estimada = fecha_estimada.slice(0, 10);
   }
+
   const body = {
     id_usuario: order.userId,
     direccion_destino: direccion_final,
-    costo_envio: Number.isFinite(costo_envio_gtq) ? Number(costo_envio_gtq.toFixed(2)) : 0,
+    costo_envio: Number(costo_final.toFixed(2)),
     fecha_estimada,
   };
+
   console.log("[envio] POST", RUTA_ENVIO, body);
   try {
     const resp = await http.post(RUTA_ENVIO, body, { headers });
@@ -255,15 +298,14 @@ async function createEnvioFromOrder(order, meta) {
   }
 }
 
+// ========================================================
+// WEBHOOK STRIPE
+// ========================================================
 exports.webhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
   try {
-    event = stripe.webhooks.constructEvent(
-      req.body,
-      sig,
-      process.env.STRIPE_WEBHOOK_SECRET
-    );
+    event = stripe.webhooks.constructEvent(req.body, sig, process.env.STRIPE_WEBHOOK_SECRET);
   } catch (err) {
     console.error("Webhook signature error:", err.message);
     return res.status(400).send(`Webhook Error: ${err.message}`);
@@ -285,6 +327,10 @@ exports.webhook = async (req, res) => {
 
     if (event.type === "payment_intent.succeeded") {
       const intent = event.data.object;
+
+      console.log("[webhook] payment_intent.succeeded =>", intent.id);
+      console.log("[webhook] metadata recibido =>", intent.metadata);
+
       const orderId = intent.metadata?.orderId;
       if (orderId) {
         const order = await Order.findByPk(orderId);
@@ -302,6 +348,8 @@ exports.webhook = async (req, res) => {
         } catch (_) {
           metaItems = [];
         }
+
+        console.log("[webhook] metaItems parsed len:", metaItems.length);
 
         const { invoice } = await createOrGetInvoice(order, intent.id);
         await createInvoiceDetails(invoice, order, metaItems, fxFromOrder);
