@@ -3,9 +3,19 @@ const axios = require("axios");
 const { Order, Invoice, InvoiceDetail } = require("../models");
 
 const ENVIO_BASE = process.env.ENVIO_SERVICE || "http://localhost:4001";
+const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE || "http://localhost:4003";
+const TOKEN_SERVICIOS = process.env.SERVICES_TOKEN || null;
+
 const RUTA_ENVIO = `${ENVIO_BASE}/envio-service/envio`;
 const RUTA_ESTADO_ENVIO = `${ENVIO_BASE}/envio-service/estado_envio`;
 const RUTA_ENVIO_PRODUCTO = `${ENVIO_BASE}/envio-service/envio_producto`;
+
+const http = axios.create({
+  timeout: 10000,
+  validateStatus: (s) => s < 500,
+});
+
+const headers = TOKEN_SERVICIOS ? { Authorization: `Bearer ${TOKEN_SERVICIOS}` } : {};
 
 const getFxGtqToUsd = () => {
   const raw = process.env.FX_GTQ_TO_USD;
@@ -157,15 +167,8 @@ async function createInvoiceDetails(invoice, order, metaItems, fxFromOrder) {
 }
 
 async function decrementStockByVariant(order, metaItems) {
-  const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE;
-  if (!PRODUCTO_SERVICE) {
-    console.warn("PRODUCTO_SERVICE no configurado; se omite decremento de stock.");
-    return true;
-  }
-  if (order.stock_discounted) {
-    console.info("Stock ya descontado previamente. Se omite.");
-    return true;
-  }
+  if (!PRODUCTO_SERVICE) return true;
+  if (order.stock_discounted) return true;
 
   const byVariant = {};
   for (const it of metaItems) {
@@ -176,32 +179,32 @@ async function decrementStockByVariant(order, metaItems) {
   }
 
   if (Object.keys(byVariant).length === 0) {
-    console.warn("No hay variantIds válidos en metadata; no se descuenta stock.");
     await order.update({ stock_discounted: true });
     return true;
   }
 
-  const calls = Object.entries(byVariant).map(([variantId, qty]) =>
-    axios.post(
-      `${PRODUCTO_SERVICE}/producto-service/producto-talla-color/${variantId}/decrement`,
-      { qty }
-    )
-  );
+  const calls = Object.entries(byVariant).map(async ([variantId, qty]) => {
+    const url = `${PRODUCTO_SERVICE}/producto-service/producto-talla-color/${variantId}/decrement`;
+    console.log("[stock] POST", url, { qty });
+    try {
+      const r = await http.post(url, { qty }, { headers });
+      console.log("[stock] response", r.status, r.data);
+      return r.status;
+    } catch (e) {
+      console.error("[stock] ERROR", e.response?.status, e.response?.data || e.message);
+      throw e;
+    }
+  });
 
   const results = await Promise.allSettled(calls);
   await order.update({ stock_discounted: true });
 
-  for (const r of results) {
-    if (r.status === "rejected") {
-      console.error("Fallo decremento de stock:", r.reason?.message);
-    }
-  }
   return results.every((r) => r.status === "fulfilled");
 }
 
 async function ensureEstadoEnvio(id_envio) {
   try {
-    await axios.post(RUTA_ESTADO_ENVIO, { id_envio });
+    await http.post(RUTA_ESTADO_ENVIO, { id_envio }, { headers });
     return true;
   } catch (e) {
     console.warn("No se pudo crear Estado de Envío:", e?.message);
@@ -209,47 +212,18 @@ async function ensureEstadoEnvio(id_envio) {
   }
 }
 
-async function resolveProductIdForItem(PRODUCTO_SERVICE, it) {
-  if (Number(it?.pid) > 0) return Number(it.pid);
-  const variantId = Number(it?.v);
-  if (!PRODUCTO_SERVICE || !variantId) return null;
-  try {
-    const r = await axios.get(
-      `${PRODUCTO_SERVICE}/producto-service/producto-talla-color/${variantId}`
-    );
-    const data = r?.data;
-    const productId =
-      data?.producto_id || data?.id_producto || data?.producto?.id || data?.productoId || null;
-    return Number(productId) || null;
-  } catch (e) {
-    console.warn("No se pudo resolver producto desde variante:", variantId, e?.message);
-    return null;
-  }
-}
-
 async function createEnvioProductoBatch(id_envio, metaItems) {
-  const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE;
   if (!Array.isArray(metaItems) || metaItems.length === 0) return;
   const payloads = [];
   for (const it of metaItems) {
     const cantidad = Number(it.q) || 1;
-    let id_producto = Number(it.pid) || null;
-    if (!id_producto) {
-      id_producto = await resolveProductIdForItem(PRODUCTO_SERVICE, it);
-    }
+    const id_producto = Number(it.pid) || null;
     if (!id_producto) continue;
     payloads.push({ id_envio, id_producto, cantidad });
   }
   if (payloads.length === 0) return;
-  const calls = payloads.map((body) =>
-    axios.post(RUTA_ENVIO_PRODUCTO, body, { withCredentials: true })
-  );
-  const results = await Promise.allSettled(calls);
-  for (const r of results) {
-    if (r.status === "rejected") {
-      console.error("Error creando envio_producto:", r.reason?.message);
-    }
-  }
+  const calls = payloads.map((body) => http.post(RUTA_ENVIO_PRODUCTO, body, { headers }));
+  await Promise.allSettled(calls);
 }
 
 async function createEnvioFromOrder(order, meta) {
@@ -262,19 +236,21 @@ async function createEnvioFromOrder(order, meta) {
       .toISOString()
       .slice(0, 10);
   }
+  const body = {
+    id_usuario: order.userId,
+    direccion_destino: direccion_final,
+    costo_envio: Number.isFinite(costo_envio_gtq) ? Number(costo_envio_gtq.toFixed(2)) : 0,
+    fecha_estimada,
+  };
+  console.log("[envio] POST", RUTA_ENVIO, body);
   try {
-    const body = {
-      id_usuario: order.userId,
-      direccion_destino: direccion_final,
-      costo_envio: Number.isFinite(costo_envio_gtq) ? Number(costo_envio_gtq.toFixed(2)) : 0,
-      fecha_estimada,
-    };
-    const resp = await axios.post(RUTA_ENVIO, body, { withCredentials: true });
+    const resp = await http.post(RUTA_ENVIO, body, { headers });
+    console.log("[envio] response", resp.status, resp.data);
     const envio = resp?.data?.envio || resp?.data || null;
     if (!envio?.id_envio) return null;
     return envio;
   } catch (e) {
-    console.error("Error creando Envío:", e?.message);
+    console.error("[envio] ERROR", e.response?.status, e.response?.data || e.message);
     return null;
   }
 }
@@ -326,35 +302,10 @@ exports.webhook = async (req, res) => {
         } catch (_) {
           metaItems = [];
         }
-        if (!metaItems.length && order.stripeSessionId) {
-          try {
-            const lineItems = await stripe.checkout.sessions.listLineItems(
-              order.stripeSessionId,
-              { limit: 100 }
-            );
-            metaItems = lineItems.data.map((li) => ({
-              n: li.description || li.price?.product || "Item",
-              q: li.quantity || 1,
-              p:
-                li.quantity && fxFromOrder
-                  ? (li.amount_subtotal / 100) / fxFromOrder / li.quantity
-                  : 0,
-              v: 0,
-              pid: 0,
-            }));
-          } catch (e) {
-            console.warn("No se pudieron leer line_items del Session:", e?.message);
-          }
-        }
 
         const { invoice } = await createOrGetInvoice(order, intent.id);
         await createInvoiceDetails(invoice, order, metaItems, fxFromOrder);
-        try {
-          await decrementStockByVariant(order, metaItems);
-        } catch (stockErr) {
-          console.error("Error al descontar stock:", stockErr?.message);
-        }
-
+        await decrementStockByVariant(order, metaItems);
         const envio = await createEnvioFromOrder(order, {
           direccion_destino: intent?.metadata?.direccion_destino,
           costo_envio_gtq: Number(intent?.metadata?.costo_envio_gtq || 0),
@@ -362,16 +313,8 @@ exports.webhook = async (req, res) => {
         });
 
         if (envio?.id_envio) {
-          try {
-            await createEnvioProductoBatch(envio.id_envio, metaItems);
-          } catch (e) {
-            console.error("Fallo creación Envío-Producto:", e?.message);
-          }
-          try {
-            await ensureEstadoEnvio(envio.id_envio);
-          } catch (e) {
-            console.error("Fallo ensureEstadoEnvio:", e?.message);
-          }
+          await createEnvioProductoBatch(envio.id_envio, metaItems);
+          await ensureEstadoEnvio(envio.id_envio);
         } else {
           console.warn("No se creó Envío; se omite Envío-Producto y Estado.");
         }
