@@ -184,7 +184,7 @@ async function decrementStockByVariant(order, metaItems) {
   }
 
   const calls = Object.entries(byVariant).map(async ([variantId, qty]) => {
-    const url = `${PRODUCTO_SERVICE}/producto-service/producto-talla-color/${variantId}/decrement`;
+    const url = `${PRODUCTO_SERVICE}/producto-service/producto-talla/${variantId}/decrement`;
     console.log("[stock] POST", url, { qty });
     try {
       const r = await http.post(url, { qty }, { headers });
