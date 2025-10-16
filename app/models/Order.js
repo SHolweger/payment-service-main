@@ -40,6 +40,11 @@ module.exports = (sequelize, DataTypes) => {
     stock_discounted:{
       type: DataTypes.BOOLEAN,
       defaultValue: false
+    },
+     shipping_meta: {
+      type: DataTypes.JSON,
+      allowNull: true,
+      comment: "Datos del envío (dirección, costo, fecha estimada)"
     }
   });
 

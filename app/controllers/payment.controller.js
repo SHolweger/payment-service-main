@@ -29,6 +29,46 @@ const getFxGtqToUsd = () => {
 const toUsdCentsFromGtq = (gtq, fx) => Math.round(Number(gtq) * fx * 100);
 const toGtqCentsFromUsdCents = (usd_cents, fx) => Math.round(usd_cents / fx);
 
+/** Util: compone metadata de envío con fallback a Order.shipping_meta */
+function buildShippingMeta({ meta = {}, order }) {
+  const om = order?.shipping_meta || {};
+  // preferir metadata del intent; si no hay, usar lo almacenado en Order; defaults seguros:
+  const direccion_destino =
+    (typeof meta.direccion_destino === "string" && meta.direccion_destino.trim()) ||
+    (typeof om.direccion_destino === "string" && om.direccion_destino.trim()) ||
+    "Sin dirección";
+
+  // aceptar tanto costo_envio_gtq como costo_envio por si el cliente envió otro nombre:
+  const costo_envio_gtq =
+    meta.costo_envio_gtq != null
+      ? Number(meta.costo_envio_gtq)
+      : om.costo_envio_gtq != null
+      ? Number(om.costo_envio_gtq)
+      : om.costo_envio != null
+      ? Number(om.costo_envio)
+      : 0;
+
+  let fecha_estimada =
+    (typeof meta.fecha_estimada === "string" && meta.fecha_estimada) ||
+    (typeof om.fecha_estimada === "string" && om.fecha_estimada) ||
+    "";
+
+  if (!fecha_estimada) {
+    const hoy = new Date();
+    fecha_estimada = new Date(hoy.getFullYear(), hoy.getMonth(), hoy.getDate() + 3)
+      .toISOString()
+      .slice(0, 10);
+  } else if (fecha_estimada.includes("T")) {
+    fecha_estimada = fecha_estimada.slice(0, 10);
+  }
+
+  return {
+    direccion_destino,
+    costo_envio_gtq: Number.isFinite(costo_envio_gtq) ? costo_envio_gtq : 0,
+    fecha_estimada,
+  };
+}
+
 // ========================================================
 // CHECKOUT SESSION
 // ========================================================
@@ -73,6 +113,7 @@ exports.createCheckoutSession = async (req, res) => {
     );
     const amount_gtq_cents = toGtqCentsFromUsdCents(amount_cents, fx);
 
+    // Persistimos TODO en la orden (incluye shipping_meta) para usarlo como fallback en el webhook
     const order = await Order.create({
       userId,
       amount_cents,
@@ -81,6 +122,12 @@ exports.createCheckoutSession = async (req, res) => {
       status: "pending",
       nit: nit || "CF",
       stock_discounted: false,
+      shipping_meta: {
+        direccion_destino: direccion_destino || "Sin dirección",
+        // guardamos con nombre costo_envio_gtq para consistencia con webhook
+        costo_envio_gtq: Number(costo_envio || 0),
+        fecha_estimada: fecha_estimada || "",
+      },
     });
 
     console.log("[checkout] METADATA a enviar =>", {
@@ -106,6 +153,7 @@ exports.createCheckoutSession = async (req, res) => {
           orderId: String(order.id),
           nit: String(nit || "CF"),
           items: JSON.stringify(compactItems),
+          // Igual intentamos mandarlo, pero si llega undefined, el webhook usará shipping_meta
           direccion_destino: String(direccion_destino || "Sin dirección"),
           costo_envio_gtq: String(Number(costo_envio || 0)),
           fecha_estimada: String(fecha_estimada || ""),
@@ -348,17 +396,17 @@ exports.webhook = async (req, res) => {
         } catch (_) {
           metaItems = [];
         }
-
         console.log("[webhook] metaItems parsed len:", metaItems.length);
+
+        // ← NUEVO: construir metadata de envío desde intent.metadata con fallback a order.shipping_meta
+        const shippingMeta = buildShippingMeta({ meta: intent?.metadata || {}, order });
+        console.log("[webhook] shippingMeta usado =>", shippingMeta);
 
         const { invoice } = await createOrGetInvoice(order, intent.id);
         await createInvoiceDetails(invoice, order, metaItems, fxFromOrder);
         await decrementStockByVariant(order, metaItems);
-        const envio = await createEnvioFromOrder(order, {
-          direccion_destino: intent?.metadata?.direccion_destino,
-          costo_envio_gtq: Number(intent?.metadata?.costo_envio_gtq || 0),
-          fecha_estimada: intent?.metadata?.fecha_estimada || "",
-        });
+
+        const envio = await createEnvioFromOrder(order, shippingMeta);
 
         if (envio?.id_envio) {
           await createEnvioProductoBatch(envio.id_envio, metaItems);
