@@ -301,7 +301,7 @@ async function deleteCarritoUser(order){
     console.log("No viene la orden")
     return;
   }
-  if(!CARRITO_SERVICE_SERVICE){
+  if(!CARRITO_SERVICE){
     console.log("No se pudo importar la ruta del carrito")
     return;
   }
