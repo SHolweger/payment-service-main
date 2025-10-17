@@ -4,7 +4,7 @@ const { Order, Invoice, InvoiceDetail } = require("../models");
 
 const ENVIO_BASE = process.env.ENVIO_SERVICE || "http://localhost:4001";
 const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE || "http://localhost:4003";
-const CARRITO_SERVICE=process.env.WISHLIST_SERVICE  
+
 const TOKEN_SERVICIOS = process.env.SERVICES_TOKEN || null;
 
 const RUTA_ENVIO = `${ENVIO_BASE}/envio-service/envio`;
@@ -296,11 +296,12 @@ async function createEnvioProductoBatch(id_envio, metaItems) {
   await Promise.allSettled(calls);
 }
 async function deleteCarritoUser(order){
+  const CARRITO_SERVICE=process.env.WISHLIST_SERVICE  
   if(!order){
     console.log("No viene la orden")
     return;
   }
-  if(!WISHLIST_SERVICE){
+  if(!CARRITO_SERVICE_SERVICE){
     console.log("No se pudo importar la ruta del carrito")
     return;
   }
