@@ -4,11 +4,13 @@ const { Order, Invoice, InvoiceDetail } = require("../models");
 
 const ENVIO_BASE = process.env.ENVIO_SERVICE || "http://localhost:4001";
 const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE || "http://localhost:4003";
+const CARRITO_SERVICE=process.env.WISHLIST_SERVICE  
 const TOKEN_SERVICIOS = process.env.SERVICES_TOKEN || null;
 
 const RUTA_ENVIO = `${ENVIO_BASE}/envio-service/envio`;
 const RUTA_ESTADO_ENVIO = `${ENVIO_BASE}/envio-service/estado_envio`;
 const RUTA_ENVIO_PRODUCTO = `${ENVIO_BASE}/envio-service/envio_producto`;
+
 
 const http = axios.create({
   timeout: 10000,
@@ -29,16 +31,16 @@ const getFxGtqToUsd = () => {
 const toUsdCentsFromGtq = (gtq, fx) => Math.round(Number(gtq) * fx * 100);
 const toGtqCentsFromUsdCents = (usd_cents, fx) => Math.round(usd_cents / fx);
 
-/** Util: compone metadata de envío con fallback a Order.shipping_meta */
+
 function buildShippingMeta({ meta = {}, order }) {
   const om = order?.shipping_meta || {};
-  // preferir metadata del intent; si no hay, usar lo almacenado en Order; defaults seguros:
+
   const direccion_destino =
     (typeof meta.direccion_destino === "string" && meta.direccion_destino.trim()) ||
     (typeof om.direccion_destino === "string" && om.direccion_destino.trim()) ||
     "Sin dirección";
 
-  // aceptar tanto costo_envio_gtq como costo_envio por si el cliente envió otro nombre:
+
   const costo_envio_gtq =
     meta.costo_envio_gtq != null
       ? Number(meta.costo_envio_gtq)
@@ -69,9 +71,7 @@ function buildShippingMeta({ meta = {}, order }) {
   };
 }
 
-// ========================================================
-// CHECKOUT SESSION
-// ========================================================
+
 exports.createCheckoutSession = async (req, res) => {
   try {
     const { items = [], userId, nit, direccion_destino, costo_envio, fecha_estimada } = req.body;
@@ -113,7 +113,7 @@ exports.createCheckoutSession = async (req, res) => {
     );
     const amount_gtq_cents = toGtqCentsFromUsdCents(amount_cents, fx);
 
-    // Persistimos TODO en la orden (incluye shipping_meta) para usarlo como fallback en el webhook
+
     const order = await Order.create({
       userId,
       amount_cents,
@@ -124,7 +124,6 @@ exports.createCheckoutSession = async (req, res) => {
       stock_discounted: false,
       shipping_meta: {
         direccion_destino: direccion_destino || "Sin dirección",
-        // guardamos con nombre costo_envio_gtq para consistencia con webhook
         costo_envio_gtq: Number(costo_envio || 0),
         fecha_estimada: fecha_estimada || "",
       },
@@ -153,7 +152,6 @@ exports.createCheckoutSession = async (req, res) => {
           orderId: String(order.id),
           nit: String(nit || "CF"),
           items: JSON.stringify(compactItems),
-          // Igual intentamos mandarlo, pero si llega undefined, el webhook usará shipping_meta
           direccion_destino: String(direccion_destino || "Sin dirección"),
           costo_envio_gtq: String(Number(costo_envio || 0)),
           fecha_estimada: String(fecha_estimada || ""),
@@ -174,9 +172,7 @@ exports.createCheckoutSession = async (req, res) => {
   }
 };
 
-// ========================================================
-// FACTURACIÓN
-// ========================================================
+
 async function createOrGetInvoice(order, intentId) {
   let invoice = await Invoice.findOne({ where: { orderId: order.id } });
   if (invoice) return { invoice, receiptUrl: invoice.receipt_url || null };
@@ -239,9 +235,7 @@ async function createInvoiceDetails(invoice, order, metaItems, fxFromOrder) {
   }
 }
 
-// ========================================================
-// STOCK
-// ========================================================
+
 async function decrementStockByVariant(order, metaItems) {
   if (!PRODUCTO_SERVICE) return true;
   if (order.stock_discounted) return true;
@@ -278,9 +272,6 @@ async function decrementStockByVariant(order, metaItems) {
   return results.every((r) => r.status === "fulfilled");
 }
 
-// ========================================================
-// ENVÍOS
-// ========================================================
 async function ensureEstadoEnvio(id_envio) {
   try {
     await http.post(RUTA_ESTADO_ENVIO, { id_envio }, { headers });
@@ -304,7 +295,33 @@ async function createEnvioProductoBatch(id_envio, metaItems) {
   const calls = payloads.map((body) => http.post(RUTA_ENVIO_PRODUCTO, body, { headers }));
   await Promise.allSettled(calls);
 }
-
+async function deleteCarritoUser(order){
+  if(!order){
+    console.log("No viene la orden")
+    return;
+  }
+  if(!WISHLIST_SERVICE){
+    console.log("No se pudo importar la ruta del carrito")
+    return;
+  }
+  const user_id= order.userId;
+  if(!user_id){
+    console.log("No se guardo el user_id")
+    return;
+  }
+  const response_carrito=await axios.delete(`${CARRITO_SERVICE}/cart-wishlist-service/cart/clear/${user_id}`,
+    {
+      withCredentials: true
+    }
+  )
+  if(response_carrito.status===200 || response_carrito.status===204){
+    console.log("Carrito limpiado ok")
+    return true;
+  }else{
+    console.warn("Fallo al limpiar el carrito");
+    return false;
+  }
+}
 async function createEnvioFromOrder(order, meta) {
   console.log("[envio] meta recibido =>", {
     direccion_destino: meta?.direccion_destino,
@@ -346,9 +363,8 @@ async function createEnvioFromOrder(order, meta) {
   }
 }
 
-// ========================================================
-// WEBHOOK STRIPE
-// ========================================================
+
+
 exports.webhook = async (req, res) => {
   const sig = req.headers["stripe-signature"];
   let event;
@@ -398,7 +414,7 @@ exports.webhook = async (req, res) => {
         }
         console.log("[webhook] metaItems parsed len:", metaItems.length);
 
-        // ← NUEVO: construir metadata de envío desde intent.metadata con fallback a order.shipping_meta
+        
         const shippingMeta = buildShippingMeta({ meta: intent?.metadata || {}, order });
         console.log("[webhook] shippingMeta usado =>", shippingMeta);
 
@@ -411,6 +427,7 @@ exports.webhook = async (req, res) => {
         if (envio?.id_envio) {
           await createEnvioProductoBatch(envio.id_envio, metaItems);
           await ensureEstadoEnvio(envio.id_envio);
+          await deleteCarritoUser(order);
         } else {
           console.warn("No se creó Envío; se omite Envío-Producto y Estado.");
         }
