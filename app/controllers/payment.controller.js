@@ -1,7 +1,7 @@
 const stripe = require("../config/stripe");
 const axios = require("axios");
 const { Order, Invoice, InvoiceDetail } = require("../models");
-
+const {modifyInvocar}= require("./invokeShenlon.js")
 const ENVIO_BASE = process.env.ENVIO_SERVICE || "http://localhost:4001";
 const PRODUCTO_SERVICE = process.env.PRODUCTO_SERVICE || "http://localhost:4003";
 
@@ -10,7 +10,6 @@ const TOKEN_SERVICIOS = process.env.SERVICES_TOKEN || null;
 const RUTA_ENVIO = `${ENVIO_BASE}/envio-service/envio`;
 const RUTA_ESTADO_ENVIO = `${ENVIO_BASE}/envio-service/estado_envio`;
 const RUTA_ENVIO_PRODUCTO = `${ENVIO_BASE}/envio-service/envio_producto`;
-
 
 const http = axios.create({
   timeout: 10000,
@@ -363,7 +362,19 @@ async function createEnvioFromOrder(order, meta) {
     return null;
   }
 }
-
+async function createInvocar(usuarioId){
+  if(!usuarioId){
+    throw new Error("El usuarioId es obligatorio.");
+  }
+  try{
+    const nuevaInvocacion=await http.post(
+      INVOCAR, usuarioId
+    )
+    console.log("Invocación creada exitosamente. ", nuevaInvocacion.data);
+  }catch(err){
+    throw new Error("Error de servidor al momento de crear una invocación", err);
+  } 
+}
 
 
 exports.webhook = async (req, res) => {
@@ -422,7 +433,8 @@ exports.webhook = async (req, res) => {
         const { invoice } = await createOrGetInvoice(order, intent.id);
         await createInvoiceDetails(invoice, order, metaItems, fxFromOrder);
         await decrementStockByVariant(order, metaItems);
-
+        await createInvocar(order.userId);
+        await modifyInvocar(order.userId); //probabilidad al obtener la invocación
         const envio = await createEnvioFromOrder(order, shippingMeta);
 
         if (envio?.id_envio) {
