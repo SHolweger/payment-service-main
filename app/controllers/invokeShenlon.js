@@ -4,7 +4,10 @@ const PRODUCTO_SERVICE= process.env.PRODUCTO_SERVICE
 function rngFloat() {
   return crypto.randomInt(0, 1e9) / 1e9;
 }
-
+const http = axios.create({
+  timeout: 10000,
+  validateStatus: (s) => s < 500,
+});
 function computeProbFromAmount(amountGtq) {
   if (!Number.isFinite(amountGtq) || amountGtq <= 0) return 0;
   if (amountGtq >= 1000) return 0.7; // 70%
