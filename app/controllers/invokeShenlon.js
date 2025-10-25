@@ -9,6 +9,8 @@ const http = axios.create({
   timeout: 10000,
   validateStatus: (s) => s < 500,
 });
+
+const headers = TOKEN_SERVICIOS ? { Authorization: `Bearer ${TOKEN_SERVICIOS}` } : {};
 function computeProbFromAmount(amountGtq) {
   if (!Number.isFinite(amountGtq) || amountGtq <= 0) return 0;
   if (amountGtq >= 1000) return 0.7; // 70%
