@@ -2,6 +2,7 @@ const crypto = require("crypto");
 const { Order } = require("../models");
 const axios = require("axios");
 const PRODUCTO_SERVICE= process.env.PRODUCTO_SERVICE
+const TOKEN_SERVICIOS = process.env.SERVICES_TOKEN || null;
 function rngFloat() {
   return crypto.randomInt(0, 1e9) / 1e9;
 }
