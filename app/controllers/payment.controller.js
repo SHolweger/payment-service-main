@@ -10,6 +10,7 @@ const TOKEN_SERVICIOS = process.env.SERVICES_TOKEN || null;
 const RUTA_ENVIO = `${ENVIO_BASE}/envio-service/envio`;
 const RUTA_ESTADO_ENVIO = `${ENVIO_BASE}/envio-service/estado_envio`;
 const RUTA_ENVIO_PRODUCTO = `${ENVIO_BASE}/envio-service/envio_producto`;
+const INVOCAR=`${PRODUCTO_SERVICE}/producto-service/invocar`;
 
 const http = axios.create({
   timeout: 10000,
