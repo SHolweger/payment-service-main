@@ -1,6 +1,6 @@
 const crypto = require("crypto");
 const { Order } = require("../models");
-const INVOCAR= process.env.PRODUCTO_SERVICE
+const PRODUCTO_SERVICE= process.env.PRODUCTO_SERVICE
 function rngFloat() {
   return crypto.randomInt(0, 1e9) / 1e9;
 }
@@ -36,11 +36,11 @@ async function shouldInvokeShenron(usuarioId) {
 
 async function modifyInvocar(usuarioId) {
   if (!usuarioId) throw new Error("El usuarioId es obligatorio.");
-
+    console.log(usuarioId);
   try {
     const { invoke, prob, amountGtq } = await shouldInvokeShenron(usuarioId);
     const response = await http.patch(
-      `${INVOCAR}/producto-service/invocar/${usuarioId}`,
+      `${PRODUCTO_SERVICE}/producto-service/invocar/${usuarioId}`,
       { invocar: invoke },  
       { headers }
     );
