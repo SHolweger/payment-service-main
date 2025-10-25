@@ -368,14 +368,28 @@ async function createInvocar(usuarioId){
     throw new Error("El usuarioId es obligatorio.");
   }
   try{
-    const nuevaInvocacion=await http.post(
-      INVOCAR, usuarioId
-    )
-    console.log("Invocación creada exitosamente. ", nuevaInvocacion.data);
+    const resp = await http.post(
+      INVOCAR,                  
+      { usuarioId },            
+      { headers, validateStatus: s => s < 500 }
+    );
+
+    if (resp.status === 201) {
+      console.log("Invocación creada exitosamente.", resp.data);
+      return true;
+    }
+    if (resp.status === 409) {
+      console.log("Invocación ya existía para el usuario.");
+      return true;
+    }
+
+    console.warn("No se pudo crear la invocación:", resp.status, resp.data);
+    return false;
   }catch(err){
-    throw new Error("Error de servidor al momento de crear una invocación", err);
+    throw new Error("Error de servidor al momento de crear una invocación", { cause: err });
   } 
 }
+
 
 
 exports.webhook = async (req, res) => {
