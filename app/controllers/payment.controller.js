@@ -448,14 +448,14 @@ exports.webhook = async (req, res) => {
         const { invoice } = await createOrGetInvoice(order, intent.id);
         await createInvoiceDetails(invoice, order, metaItems, fxFromOrder);
         await decrementStockByVariant(order, metaItems);
-        await createInvocar(order.userId);
-        await modifyInvocar(order.userId); //probabilidad al obtener la invocación
         const envio = await createEnvioFromOrder(order, shippingMeta);
-
+        
         if (envio?.id_envio) {
           await createEnvioProductoBatch(envio.id_envio, metaItems);
           await ensureEstadoEnvio(envio.id_envio);
           await deleteCarritoUser(order);
+          await createInvocar(order.userId);
+          await modifyInvocar(order.userId); //probabilidad al obtener la invocación
         } else {
           console.warn("No se creó Envío; se omite Envío-Producto y Estado.");
         }

@@ -17,6 +17,7 @@
   "author": "Sebastian Holweger",
   "license": "ISC",
   "dependencies": {
+    "@scalar/express-api-reference": "^0.8.22",
     "axios": "^1.12.2",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
@@ -25,6 +26,7 @@
     "pg": "^8.11.0",
     "pg-hstore": "^2.3.4",
     "sequelize": "^6.32.0",
-    "stripe": "^18.5.0"
+    "stripe": "^18.5.0",
+    "swagger-jsdoc": "^6.2.8"
   }
 }
